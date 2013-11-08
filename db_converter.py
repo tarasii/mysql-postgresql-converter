@@ -5,7 +5,7 @@ Fixes a MySQL dump made with the right format so it can be directly
 imported to a new PostgreSQL database.
 
 Dump using:
-mysqldump --compatible=postgresql --default-character-set=utf8 -r databasename.mysql -u root databasename
+mysqldump -r databasename.mysql -u root databasename
 """
 
 import re
@@ -76,13 +76,13 @@ def parse(input_filename, output_filename):
         if current_table is None:
             # Start of a table creation statement?
             if line.startswith("CREATE TABLE"):
-                current_table = line.split('"')[1]
+                current_table = line.split('`')[1]
                 output.write("CREATE TABLE \"%s\" (\n" % current_table)
                 tables[current_table] = {"columns": []}
                 creation_lines = []
             # Inserting data into a table?
             elif line.startswith("INSERT INTO"):
-                output.write(line.encode("utf8").replace("'0000-00-00 00:00:00'", "NULL") + "\n")
+                output.write(line.encode("utf8").replace("'0000-00-00 00:00:00'", "NULL").replace("`","\"") + "\n")
                 num_inserts += 1
             # ???
             else:
@@ -91,14 +91,14 @@ def parse(input_filename, output_filename):
         # Inside-create-statement handling
         else:
             # Is it a column?
-            if line.startswith('"'):
-                useless, name, definition = line.strip(",").split('"',2)
+            if line.startswith('`'):
+                useless, name, definition = line.strip(",").split('`',2)
                 try:
                     type, extra = definition.strip().split(" ", 1)
                 except ValueError:
                     type = definition.strip()
                     extra = ""
-                extra = re.sub("CHARACTER SET [\w\d]+\s*", "", extra.replace("unsigned", ""))
+                extra = re.sub("CHARACTER SET [\w\d]+\s*", "", extra.replace("unsigned", "").replace("AUTO_INCREMENT",""))
                 # See if it needs type conversion
                 final_type = None
                 if type == "tinyint(1)":
@@ -135,7 +135,7 @@ def parse(input_filename, output_filename):
                 tables[current_table]['columns'].append((name, type, extra))
             # Is it a constraint or something?
             elif line.startswith("PRIMARY KEY"):
-                creation_lines.append(line.rstrip(","))
+                creation_lines.append(line.rstrip(",").replace("`","\""))
             elif line.startswith("CONSTRAINT"):
                 foreign_key_lines.append("ALTER TABLE \"%s\" ADD CONSTRAINT %s DEFERRABLE INITIALLY DEFERRED" % (current_table, line.split("CONSTRAINT")[1].strip().rstrip(",")))
                 foreign_key_lines.append("CREATE INDEX ON \"%s\" %s" % (current_table, line.split("FOREIGN KEY")[1].split("REFERENCES")[0].strip().rstrip(",")))
@@ -144,7 +144,7 @@ def parse(input_filename, output_filename):
             elif line.startswith("KEY"):
                 pass
             # Is it the end of the table?
-            elif line == ");":
+            elif line == ");" or line.startswith(") "):
                 for i, line in enumerate(creation_lines):
                     output.write("    %s%s\n" % (line, "," if i != (len(creation_lines) - 1) else ""))
                 output.write(');\n\n')
